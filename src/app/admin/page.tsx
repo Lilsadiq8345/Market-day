@@ -14,6 +14,7 @@ type Market = {
 
 type Subscriber = {
   id: string;
+  name?: string;
   email: string;
   created_at: string;
   markets: {
@@ -90,7 +91,7 @@ export default function AdminDashboard() {
   const fetchSubscribers = async () => {
     const { data, error } = await supabase
       .from("subscribers")
-      .select("id, email, created_at, markets(name)")
+      .select("id, name, email, created_at, markets(name)")
       .order("created_at", { ascending: false });
 
     if (!error && data) {
@@ -193,8 +194,9 @@ export default function AdminDashboard() {
   const exportToCSV = () => {
     if (subscribers.length === 0) return;
     
-    const headers = ["Email", "Market Subscribed", "Registration Date"];
+    const headers = ["Name", "Email", "Market Subscribed", "Registration Date"];
     const rows = subscribers.map(sub => [
+      sub.name || "N/A",
       sub.email,
       sub.markets?.name || "Unknown",
       new Date(sub.created_at).toLocaleDateString()
@@ -217,6 +219,7 @@ export default function AdminDashboard() {
 
   const filteredSubscribers = subscribers.filter(sub => 
     sub.email.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    (sub.name || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
     (sub.markets?.name || "").toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -631,6 +634,7 @@ export default function AdminDashboard() {
               <table className="w-full text-left border-collapse min-w-[600px]">
                 <thead>
                   <tr className="bg-black/40 text-zinc-400 text-xs md:text-sm uppercase tracking-wider">
+                    <th className="p-4 md:p-5 font-semibold">Subscriber Name</th>
                     <th className="p-4 md:p-5 font-semibold">Subscriber Email</th>
                     <th className="p-4 md:p-5 font-semibold">Subscribed Market</th>
                     <th className="p-4 md:p-5 font-semibold">Registration Date</th>
@@ -652,12 +656,15 @@ export default function AdminDashboard() {
                   ) : (
                     filteredSubscribers.map((sub) => (
                       <tr key={sub.id} className="hover:bg-zinc-800/30 transition-colors">
+                        <td className="p-4 md:p-5 text-white font-semibold text-sm md:text-base whitespace-nowrap">
+                          {sub.name || 'N/A'}
+                        </td>
                         <td className="p-4 md:p-5">
                           <div className="flex items-center">
                             <div className="w-7 h-7 md:w-8 md:h-8 rounded-full bg-zinc-800 text-zinc-400 flex items-center justify-center mr-3 font-bold text-xs uppercase shrink-0">
-                              {sub.email.charAt(0)}
+                              {(sub.name || sub.email).charAt(0)}
                             </div>
-                            <span className="font-semibold text-white text-sm md:text-base truncate max-w-[200px] md:max-w-none">{sub.email}</span>
+                            <span className="text-zinc-300 text-sm md:text-base truncate max-w-[200px] md:max-w-none">{sub.email}</span>
                           </div>
                         </td>
                         <td className="p-4 md:p-5">

@@ -20,6 +20,7 @@ export default function Home() {
   const [markets, setMarkets] = useState<Market[]>([]);
   const [loading, setLoading] = useState(true);
   const [subscribing, setSubscribing] = useState<string | null>(null);
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   
   // Modal State
@@ -52,8 +53,8 @@ export default function Home() {
   };
 
   const handleSubscribe = async (marketId: string) => {
-    if (!email) {
-      showModal("error", "Please provide your email address in the section above before subscribing to a market.");
+    if (!name || !email) {
+      showModal("error", "Please provide your full name and email address in the section above before subscribing to a market.");
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
@@ -62,7 +63,7 @@ export default function Home() {
 
     const { error } = await supabase
       .from("subscribers")
-      .insert([{ email, market_id: marketId }]);
+      .insert([{ name, email, market_id: marketId }]);
 
     if (error) {
       if (error.code === '23505') {
@@ -132,19 +133,26 @@ export default function Home() {
           <div className="max-w-2xl mx-auto bg-white/5 border border-white/10 backdrop-blur-2xl p-8 md:p-10 rounded-3xl shadow-[0_0_50px_rgba(0,0,0,0.5)] transform hover:scale-[1.02] transition-transform duration-500">
             <label className="flex items-center justify-center text-sm font-bold text-white mb-6 uppercase tracking-widest">
               <Mail className="w-5 h-5 mr-3 text-emerald-400" />
-              Step 1: Configure Your Email
+              Step 1: Enter Your Details
             </label>
             <div className="flex flex-col sm:flex-row gap-4">
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Enter your full name..."
+                className="flex-grow p-5 bg-black/40 border border-slate-700 text-white rounded-2xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all placeholder-slate-500 text-lg shadow-inner"
+              />
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="Enter your email address to begin..."
+                placeholder="Enter your email address..."
                 className="flex-grow p-5 bg-black/40 border border-slate-700 text-white rounded-2xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all placeholder-slate-500 text-lg shadow-inner"
               />
             </div>
             <p className="text-sm text-slate-400 mt-6 font-medium">
-              After entering your email, scroll down to subscribe to specific markets.
+              After entering your details, scroll down to subscribe to specific markets.
             </p>
           </div>
         </div>
@@ -168,8 +176,8 @@ export default function Home() {
               <div className="w-20 h-20 bg-white rounded-2xl shadow-xl flex items-center justify-center mb-6 transform hover:-translate-y-2 transition-transform duration-300">
                 <ShieldCheck className="w-10 h-10 text-emerald-600" />
               </div>
-              <h4 className="text-xl font-bold text-slate-900 mb-3">1. Register Email</h4>
-              <p className="text-slate-600 leading-relaxed">Enter your email address in the secure portal above to associate it with your device.</p>
+              <h4 className="text-xl font-bold text-slate-900 mb-3">1. Enter Details</h4>
+              <p className="text-slate-600 leading-relaxed">Enter your full name and email address in the secure portal above to associate them with your device.</p>
             </div>
             
             <div className="flex flex-col items-center">
