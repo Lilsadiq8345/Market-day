@@ -2,47 +2,67 @@
 
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
-import { CalendarDays, MapPin, CheckCircle2, Loader2, Mail, ArrowRight, Clock, ShieldCheck, Smartphone, Zap, XCircle } from "lucide-react";
+import { CalendarDays, MapPin, CheckCircle2, Loader2, Mail, ArrowRight, Clock, ShieldCheck, Smartphone, Zap, XCircle, Phone, Home } from "lucide-react";
+
+type Village = {
+  id: string;
+  name: string;
+  lga: string;
+  state: string;
+};
 
 type Market = {
   id: string;
   name: string;
+  village_id: string;
   day_of_week: number;
+  start_time: string;
   location: string;
   description: string;
+  villages?: { name: string };
 };
 
 const DAYS_OF_WEEK = [
   "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 ];
 
-export default function Home() {
+export default function HomePage() {
+  const [villages, setVillages] = useState<Village[]>([]);
   const [markets, setMarkets] = useState<Market[]>([]);
   const [loading, setLoading] = useState(true);
   const [subscribing, setSubscribing] = useState<string | null>(null);
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
   
+  // User Form State
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [homeVillageId, setHomeVillageId] = useState("");
+  
+  // Filter State
+  const [filterVillageId, setFilterVillageId] = useState("");
+
   // Modal State
   const [modalOpen, setModalOpen] = useState(false);
   const [modalType, setModalType] = useState<"success" | "error">("success");
   const [modalMessage, setModalMessage] = useState("");
 
   useEffect(() => {
-    fetchMarkets();
+    fetchData();
   }, []);
 
-  const fetchMarkets = async () => {
-    const { data, error } = await supabase
-      .from("markets")
-      .select("*")
-      .order("day_of_week", { ascending: true });
+  const fetchData = async () => {
+    setLoading(true);
+    // Fetch Villages
+    const { data: vData } = await supabase.from("villages").select("*").order("name");
+    if (vData) setVillages(vData);
 
-    if (error) {
-      console.error("Error fetching markets:", error);
-    } else {
-      setMarkets(data || []);
-    }
+    // Fetch Markets with Village name
+    const { data: mData } = await supabase
+      .from("markets")
+      .select("*, villages(name)")
+      .order("day_of_week", { ascending: true });
+    
+    if (mData) setMarkets(mData);
     setLoading(false);
   };
 
@@ -53,30 +73,78 @@ export default function Home() {
   };
 
   const handleSubscribe = async (marketId: string) => {
-    if (!name || !email) {
-      showModal("error", "Please provide your full name and email address in the section above before subscribing to a market.");
+    if (!fullName || !email) {
+      showModal("error", "Please provide your full name and email address before subscribing to a market.");
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
     setSubscribing(marketId);
 
-    const { error } = await supabase
-      .from("subscribers")
-      .insert([{ name, email, market_id: marketId }]);
+    try {
+      // 1. Upsert User (By Email)
+      const { data: existingUsers, error: fetchErr } = await supabase
+        .from("users")
+        .select("id")
+        .eq("email", email);
 
-    if (error) {
-      if (error.code === '23505') {
-        showModal("error", "You are already subscribed to this market with this email address.");
+      if (fetchErr) throw fetchErr;
+
+      let userId = "";
+
+      if (existingUsers && existingUsers.length > 0) {
+        // Update existing user
+        userId = existingUsers[0].id;
+        const { error: updateErr } = await supabase
+          .from("users")
+          .update({
+            full_name: fullName,
+            phone: phone || null,
+            village_id: homeVillageId || null
+          })
+          .eq("id", userId);
+        if (updateErr) throw updateErr;
       } else {
-        showModal("error", "Failed to securely save your subscription. Please try again.");
+        // Insert new user
+        const { data: newUser, error: insertErr } = await supabase
+          .from("users")
+          .insert([{
+            full_name: fullName,
+            email: email,
+            phone: phone || null,
+            village_id: homeVillageId || null,
+            preferred_channel: "email"
+          }])
+          .select("id")
+          .single();
+        if (insertErr) throw insertErr;
+        userId = newUser.id;
       }
-    } else {
-      showModal("success", "Subscription confirmed! We will notify you 24 hours before market day.");
+
+      // 2. Create Subscription
+      const { error: subErr } = await supabase
+        .from("subscriptions")
+        .insert([{ user_id: userId, market_id: marketId }]);
+
+      if (subErr) {
+        if (subErr.code === '23505') {
+          showModal("error", "You are already subscribed to this market with this email address.");
+        } else {
+          throw subErr;
+        }
+      } else {
+        showModal("success", "Subscription confirmed! We will notify you 24 hours before market day.");
+      }
+    } catch (err: any) {
+      showModal("error", "Failed to securely save your subscription. Please try again. " + (err.message || ""));
     }
     
     setSubscribing(null);
   };
+
+  const filteredMarkets = filterVillageId 
+    ? markets.filter(m => m.village_id === filterVillageId) 
+    : markets;
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-emerald-200">
@@ -129,30 +197,69 @@ export default function Home() {
             The official digital scheduling and reminder system for Zungeru and surrounding rural markets. Stay informed with automated, timely notifications.
           </p>
 
-          {/* Email Setup Card */}
-          <div className="max-w-2xl mx-auto bg-white/5 border border-white/10 backdrop-blur-2xl p-8 md:p-10 rounded-3xl shadow-[0_0_50px_rgba(0,0,0,0.5)] transform hover:scale-[1.02] transition-transform duration-500">
-            <label className="flex items-center justify-center text-sm font-bold text-white mb-6 uppercase tracking-widest">
+          {/* User Registration Card */}
+          <div className="max-w-4xl mx-auto bg-white/5 border border-white/10 backdrop-blur-2xl p-8 md:p-10 rounded-3xl shadow-[0_0_50px_rgba(0,0,0,0.5)] transform hover:scale-[1.01] transition-transform duration-500 text-left">
+            <label className="flex items-center justify-center text-sm font-bold text-white mb-8 uppercase tracking-widest text-center w-full">
               <Mail className="w-5 h-5 mr-3 text-emerald-400" />
-              Step 1: Enter Your Details
+              Step 1: Your Registration Details
             </label>
-            <div className="flex flex-col sm:flex-row gap-4">
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Enter your full name..."
-                className="flex-grow p-5 bg-black/40 border border-slate-700 text-white rounded-2xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all placeholder-slate-500 text-lg shadow-inner"
-              />
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="Enter your email address..."
-                className="flex-grow p-5 bg-black/40 border border-slate-700 text-white rounded-2xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all placeholder-slate-500 text-lg shadow-inner"
-              />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-slate-300 ml-1">Full Name *</label>
+                <div className="relative flex items-center">
+                  <input
+                    type="text"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="Enter your full name"
+                    className="w-full p-4 bg-black/40 border border-slate-700 text-white rounded-2xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all placeholder-slate-500"
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-slate-300 ml-1">Email Address *</label>
+                <div className="relative flex items-center">
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="Enter your email"
+                    className="w-full p-4 bg-black/40 border border-slate-700 text-white rounded-2xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all placeholder-slate-500"
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-slate-300 ml-1">Phone Number (Optional)</label>
+                <div className="relative flex items-center">
+                  <Phone className="w-5 h-5 absolute left-4 text-slate-500" />
+                  <input
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="Phone number"
+                    className="w-full pl-12 p-4 bg-black/40 border border-slate-700 text-white rounded-2xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all placeholder-slate-500"
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-slate-300 ml-1">Home Village (Optional)</label>
+                <div className="relative flex items-center">
+                  <Home className="w-5 h-5 absolute left-4 text-slate-500" />
+                  <select
+                    value={homeVillageId}
+                    onChange={(e) => setHomeVillageId(e.target.value)}
+                    className="w-full pl-12 p-4 bg-black/40 border border-slate-700 text-white rounded-2xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all appearance-none cursor-pointer"
+                  >
+                    <option value="" className="bg-slate-900 text-slate-500">Select your village...</option>
+                    {villages.map(v => (
+                      <option key={v.id} value={v.id} className="bg-slate-900 text-white">{v.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
             </div>
-            <p className="text-sm text-slate-400 mt-6 font-medium">
-              After entering your details, scroll down to subscribe to specific markets.
+            <p className="text-sm text-slate-400 mt-8 text-center font-medium">
+              After filling in your details, scroll down to browse and subscribe to specific markets.
             </p>
           </div>
         </div>
@@ -204,10 +311,24 @@ export default function Home() {
         <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:20px_20px] opacity-30 pointer-events-none"></div>
         
         <div className="max-w-7xl mx-auto px-6 relative z-10">
-          <div className="text-center mb-16">
-            <h2 className="text-sm font-bold text-emerald-600 uppercase tracking-widest mb-3">Step 2</h2>
-            <h3 className="text-4xl md:text-5xl font-extrabold text-slate-900 tracking-tight mb-4">Available Markets</h3>
-            <p className="text-lg text-slate-500 max-w-2xl mx-auto">Click "Subscribe to Alerts" on any market below to register for notifications.</p>
+          <div className="flex flex-col md:flex-row justify-between items-center mb-16 gap-6">
+            <div className="text-left">
+              <h2 className="text-sm font-bold text-emerald-600 uppercase tracking-widest mb-3">Step 2</h2>
+              <h3 className="text-4xl md:text-5xl font-extrabold text-slate-900 tracking-tight mb-4">Available Markets</h3>
+              <p className="text-lg text-slate-500">Click "Subscribe to Alerts" on any market below.</p>
+            </div>
+            <div className="w-full md:w-72">
+              <select
+                value={filterVillageId}
+                onChange={(e) => setFilterVillageId(e.target.value)}
+                className="w-full p-4 bg-slate-50 border border-slate-200 text-slate-900 rounded-2xl focus:ring-2 focus:ring-emerald-500 outline-none transition-all shadow-sm font-medium"
+              >
+                <option value="">All Villages</option>
+                {villages.map(v => (
+                  <option key={v.id} value={v.id}>{v.name}</option>
+                ))}
+              </select>
+            </div>
           </div>
           
           {loading ? (
@@ -218,33 +339,37 @@ export default function Home() {
               </div>
               <p className="text-slate-500 font-medium animate-pulse text-lg">Synchronizing secure database...</p>
             </div>
-          ) : markets.length === 0 ? (
+          ) : filteredMarkets.length === 0 ? (
             <div className="text-center p-20 bg-slate-50 rounded-3xl border border-slate-200 shadow-inner max-w-3xl mx-auto">
               <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center mx-auto mb-8 shadow-sm">
                 <CalendarDays className="w-12 h-12 text-slate-300" />
               </div>
-              <h3 className="text-3xl font-bold text-slate-900 mb-4">No Markets Scheduled</h3>
-              <p className="text-slate-500 text-lg">The administration has not yet published the market schedules. Please check back later.</p>
+              <h3 className="text-3xl font-bold text-slate-900 mb-4">No Markets Found</h3>
+              <p className="text-slate-500 text-lg">The administration has not yet published schedules for the selected area.</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
-              {markets.map((market) => (
+              {filteredMarkets.map((market) => (
                 <div 
                   key={market.id} 
                   className="bg-white rounded-3xl border border-slate-200 shadow-xl hover:shadow-2xl hover:-translate-y-2 transition-all duration-500 group flex flex-col overflow-hidden"
                 >
                   <div className="h-3 w-full bg-gradient-to-r from-emerald-400 to-blue-500"></div>
                   <div className="p-8 md:p-10 flex-grow">
+                    <div className="inline-block px-3 py-1 bg-blue-50 text-blue-600 text-xs font-bold rounded-full mb-4 uppercase tracking-wider border border-blue-100">
+                      {market.villages?.name || 'Central'}
+                    </div>
                     <h3 className="text-2xl md:text-3xl font-extrabold text-slate-900 group-hover:text-emerald-600 transition-colors leading-tight mb-8">
                       {market.name}
                     </h3>
                     
-                    <div className="space-y-5 mb-8">
+                    <div className="space-y-4 mb-8">
                       <div className="flex items-center text-slate-700 bg-slate-50 p-4 rounded-xl border border-slate-100 group-hover:bg-emerald-50 transition-colors">
                         <CalendarDays className="w-6 h-6 mr-4 text-emerald-600 shrink-0" />
                         <div>
                           <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Schedule</p>
-                          <p className="font-bold text-lg text-slate-900">Every {DAYS_OF_WEEK[market.day_of_week]}</p>
+                          <p className="font-bold text-slate-900">Every {DAYS_OF_WEEK[market.day_of_week]}</p>
+                          <p className="text-xs font-medium text-emerald-600 mt-0.5">Starts at {market.start_time.substring(0, 5)}</p>
                         </div>
                       </div>
                       

@@ -20,10 +20,16 @@ serve(async (req) => {
     tomorrow.setDate(tomorrow.getDate() + 1);
     const tomorrowDayOfWeek = tomorrow.getDay();
 
-    // 3. Find markets happening tomorrow
+    // 3. Find markets happening tomorrow, joined with villages
     const { data: markets, error: marketError } = await supabaseClient
       .from("markets")
-      .select("id, name, location")
+      .select(`
+        id, 
+        name, 
+        location,
+        start_time,
+        villages (name)
+      `)
       .eq("day_of_week", tomorrowDayOfWeek);
 
     if (marketError) throw marketError;
@@ -37,15 +43,23 @@ serve(async (req) => {
 
     const marketIds = markets.map((m) => m.id);
 
-    // 4. Find all subscribers for these markets
-    const { data: subscribers, error: subError } = await supabaseClient
-      .from("subscribers")
-      .select("name, email, market_id")
+    // 4. Find all subscriptions for these markets, joined with users
+    const { data: subscriptions, error: subError } = await supabaseClient
+      .from("subscriptions")
+      .select(`
+        market_id,
+        users (
+          id,
+          full_name,
+          email,
+          preferred_channel
+        )
+      `)
       .in("market_id", marketIds);
 
     if (subError) throw subError;
 
-    if (!subscribers || subscribers.length === 0) {
+    if (!subscriptions || subscriptions.length === 0) {
       return new Response(
         JSON.stringify({ message: "No subscribers to notify." }),
         { headers: { "Content-Type": "application/json" } }
@@ -56,17 +70,24 @@ serve(async (req) => {
     const options: Intl.DateTimeFormatOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
     const formattedDate = tomorrow.toLocaleDateString('en-US', options);
 
-    // 5. Send emails via Brevo
+    // 5. Send emails via Brevo and log
     let emailsSent = 0;
 
     for (const market of markets) {
-      const marketSubs = subscribers.filter((s) => s.market_id === market.id);
+      const marketSubs = subscriptions.filter((s) => s.market_id === market.id);
       
       for (const sub of marketSubs) {
+        // Since it's a join, sub.users is an object or array. Supabase returns single object for one-to-many relationship from the child side
+        const user = Array.isArray(sub.users) ? sub.users[0] : sub.users;
+        
+        if (!user || !user.email || user.preferred_channel !== 'email') continue;
+
         if (!BREVO_API_KEY) {
-          console.warn("Missing BREVO_API_KEY, skipping email to", sub.email);
+          console.warn("Missing BREVO_API_KEY, skipping email to", user.email);
           continue;
         }
+
+        const villageName = Array.isArray(market.villages) ? market.villages[0]?.name : market.villages?.name;
 
         const res = await fetch("https://api.brevo.com/v3/smtp/email", {
           method: "POST",
@@ -82,8 +103,8 @@ serve(async (req) => {
             },
             to: [
               {
-                email: sub.email,
-                name: sub.name || "Market User"
+                email: user.email,
+                name: user.full_name || "Market User"
               }
             ],
             subject: `Upcoming: ${market.name} is Tomorrow!`,
@@ -100,7 +121,7 @@ serve(async (req) => {
                   
                   <!-- Body -->
                   <div style="padding: 40px 30px;">
-                    <p style="font-size: 18px; color: #1e293b; margin-bottom: 24px; font-weight: 600;">Dear ${sub.name || 'Subscriber'},</p>
+                    <p style="font-size: 18px; color: #1e293b; margin-bottom: 24px; font-weight: 600;">Dear ${user.full_name || 'Subscriber'},</p>
                     
                     <p style="font-size: 16px; color: #475569; line-height: 1.6; margin-bottom: 35px;">
                       This is a scheduled automated alert to remind you that your subscribed market is taking place tomorrow. Please find your market details below so you can prepare accordingly.
@@ -111,10 +132,16 @@ serve(async (req) => {
                       <h2 style="margin: 0 0 15px 0; color: #0f172a; font-size: 22px; font-weight: 800;">${market.name}</h2>
                       <div style="display: flex; flex-direction: column; gap: 10px;">
                         <p style="margin: 0; color: #475569; font-size: 16px;">
+                          <strong style="color: #1e293b; display: inline-block; width: 80px;">📍 Village:</strong> ${villageName || 'N/A'}
+                        </p>
+                        <p style="margin: 0; color: #475569; font-size: 16px;">
                           <strong style="color: #1e293b; display: inline-block; width: 80px;">📍 Location:</strong> ${market.location}
                         </p>
                         <p style="margin: 0; color: #475569; font-size: 16px;">
                           <strong style="color: #1e293b; display: inline-block; width: 80px;">📅 Date:</strong> ${formattedDate}
+                        </p>
+                        <p style="margin: 0; color: #475569; font-size: 16px;">
+                          <strong style="color: #1e293b; display: inline-block; width: 80px;">⏰ Time:</strong> ${market.start_time}
                         </p>
                       </div>
                     </div>
@@ -143,16 +170,30 @@ serve(async (req) => {
           }),
         });
 
-        if (res.ok) {
-          emailsSent++;
+        const status = res.ok ? "success" : "failed";
+        let errorMessage = null;
+        if (!res.ok) {
+          errorMessage = await res.text();
+          console.error(`Failed to send email to ${user.email}: ${errorMessage}`);
         } else {
-          console.error(`Failed to send email to ${sub.email}: ${await res.text()}`);
+          emailsSent++;
         }
+
+        // Insert into reminder_logs
+        await supabaseClient.from("reminder_logs").insert([
+          {
+            user_id: user.id,
+            market_id: market.id,
+            channel: "email",
+            status: status,
+            error_message: errorMessage
+          }
+        ]);
       }
     }
 
     return new Response(
-      JSON.stringify({ message: `Successfully sent ${emailsSent} reminders via Brevo.` }),
+      JSON.stringify({ message: `Successfully sent ${emailsSent} reminders.` }),
       { headers: { "Content-Type": "application/json" } }
     );
   } catch (err) {
@@ -162,3 +203,4 @@ serve(async (req) => {
     );
   }
 });
+
